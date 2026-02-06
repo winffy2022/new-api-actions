@@ -1,0 +1,106 @@
+name: Build New-API (FE + BE)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  # 阶段 1: 构建前端 (Web UI)
+  build-frontend:
+    name: Build Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          repository: QuantumNous/new-api
+          ref: main
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18' # 推荐使用 Node 18 或 20
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Install Dependencies
+        run: |
+          cd web
+          pnpm install
+
+      - name: Build Frontend
+        run: |
+          cd web
+          pnpm build
+
+      - name: Upload Frontend Artifacts
+        # 将构建好的 web/dist 目录打包上传，供后续后端构建使用
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: web/dist
+
+  # 阶段 2: 构建后端 (多平台 Go 编译)
+  build-backend:
+    name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+    needs: build-frontend # 依赖前端构建完成
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, windows, darwin]
+        goarch: [amd64, arm64]
+        exclude:
+          - goos: windows
+            goarch: arm64
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          repository: QuantumNous/new-api
+          ref: main
+
+      - name: Download Frontend Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: web/dist # 放回 web/dist 目录，以便 Go embed
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: true
+
+      - name: Build Binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0 # 禁用 CGO 生成静态二进制文件
+          OUTPUT_NAME: new-api-${{ matrix.goos }}-${{ matrix.goarch }}
+        run: |
+          if [ "$GOOS" = "windows" ]; then
+            OUTPUT_NAME="$OUTPUT_NAME.exe"
+          fi
+          
+          # 检查前端文件是否存在 (调试用)
+          ls -R web/dist | head -n 20
+          
+          # 执行构建
+          # -ldflags="-s -w" 减小体积
+          go build -v -ldflags="-s -w" -o "$OUTPUT_NAME" .
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            new-api-*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
