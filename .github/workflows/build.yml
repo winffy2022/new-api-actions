@@ -1,4 +1,4 @@
-name: Build New-API (FE + BE)
+name: Build New-API (Using Bun)
 
 on:
   push:
@@ -9,37 +9,42 @@ permissions:
   contents: write
 
 jobs:
-  # 阶段 1: 构建前端 (Web UI)
+  # 阶段 1: 构建前端 (使用 Bun)
   build-frontend:
     name: Build Frontend
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web # 指定工作目录为 web
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
         with:
-          repository: QuantumNous/new-api
+          repository: QuantumNous/new-api # 你的目标仓库
           ref: main
 
+      # 1. 设置 Node.js 环境 (文档要求 Node 18+)
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18' # 推荐使用 Node 18 或 20
+          node-version: '18'
 
-      - name: Install pnpm
-        run: npm install -g pnpm
+      # 2. 安装 Bun (官方推荐方式)
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest # 使用最新版 Bun
 
+      # 3. 安装依赖 (文档命令: bun install)
       - name: Install Dependencies
-        run: |
-          cd web
-          pnpm install
+        run: bun install
 
+      # 4. 构建前端 (文档命令: bun run build)
       - name: Build Frontend
-        run: |
-          cd web
-          pnpm build
+        run: bun run build
 
+      # 上传构建产物
       - name: Upload Frontend Artifacts
-        # 将构建好的 web/dist 目录打包上传，供后续后端构建使用
         uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
@@ -48,7 +53,7 @@ jobs:
   # 阶段 2: 构建后端 (多平台 Go 编译)
   build-backend:
     name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
-    needs: build-frontend # 依赖前端构建完成
+    needs: build-frontend
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -68,7 +73,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: frontend-dist
-          path: web/dist # 放回 web/dist 目录，以便 Go embed
+          path: web/dist
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -80,18 +85,15 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 0 # 禁用 CGO 生成静态二进制文件
+          CGO_ENABLED: 0
           OUTPUT_NAME: new-api-${{ matrix.goos }}-${{ matrix.goarch }}
         run: |
           if [ "$GOOS" = "windows" ]; then
             OUTPUT_NAME="$OUTPUT_NAME.exe"
           fi
+          # 检查 web/dist 是否存在
+          ls -R web/dist | head -n 5
           
-          # 检查前端文件是否存在 (调试用)
-          ls -R web/dist | head -n 20
-          
-          # 执行构建
-          # -ldflags="-s -w" 减小体积
           go build -v -ldflags="-s -w" -o "$OUTPUT_NAME" .
 
       - name: Release
